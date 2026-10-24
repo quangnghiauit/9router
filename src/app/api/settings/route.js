@@ -13,6 +13,25 @@ const SETTINGS_RESPONSE_HEADERS = {
 
 // Secrets must never be mass-assigned from request body (CWE-915)
 const PROTECTED_SETTING_KEYS = ["password", "mitmSudoEncrypted"];
+const QUOTA_RESERVE_PROVIDERS = ["claude", "codex"];
+
+function validPercent(value) {
+  return Number.isInteger(value) && value >= 0 && value <= 100;
+}
+
+function validQuotaReserveRouting(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (typeof value.enabled !== "boolean" || typeof value.blockWhenQuotaUnknown !== "boolean") return false;
+  if (!value.providers || typeof value.providers !== "object" || Array.isArray(value.providers)) return false;
+  return QUOTA_RESERVE_PROVIDERS.every((provider) => {
+    const config = value.providers[provider];
+    return config
+      && typeof config === "object"
+      && typeof config.enabled === "boolean"
+      && validPercent(config.fiveHourReservePercent)
+      && validPercent(config.weeklyReservePercent);
+  });
+}
 
 export async function GET() {
   try {
@@ -41,6 +60,13 @@ export async function PATCH(request) {
 
     // Strip protected secrets before any internal handling sets them
     for (const key of PROTECTED_SETTING_KEYS) delete body[key];
+
+    if (
+      Object.prototype.hasOwnProperty.call(body, "quotaReserveRouting")
+      && !validQuotaReserveRouting(body.quotaReserveRouting)
+    ) {
+      return NextResponse.json({ error: "Invalid quota reserve routing settings" }, { status: 400 });
+    }
 
     // If updating password, hash it
     if (body.newPassword) {
@@ -94,6 +120,12 @@ export async function PATCH(request) {
       Object.prototype.hasOwnProperty.call(body, "comboStrategies")
     ) {
       resetComboRotation();
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, "quotaReserveRouting")) {
+      import("@/sse/services/quotaReserve.js")
+        .then(({ configureQuotaReserveScheduler }) => configureQuotaReserveScheduler())
+        .catch((error) => console.warn("[QuotaReserve] settings update failed:", error.message));
     }
 
     if (

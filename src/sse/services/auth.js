@@ -4,6 +4,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
+import { filterConnectionsByQuotaReserve, getQuotaReserveUnavailable } from "./quotaReserve.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -84,7 +85,7 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
     const antigravityQuotaCache = isAntigravity && model ? getAntigravityQuotaCache() : null;
 
     // Filter out model-locked, excluded, and Antigravity quota-exhausted connections.
-    const availableConnections = connections.filter(c => {
+    const prefilteredConnections = connections.filter(c => {
       if (excludeSet.has(c.id)) return false;
       if (isModelLockActive(c, model)) return false;
       const enabled = c.providerSpecificData?.enabledModels;
@@ -101,6 +102,10 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       }
       return true;
     });
+
+    const settings = await getSettings();
+    const quotaReserve = filterConnectionsByQuotaReserve(prefilteredConnections, providerId, settings);
+    const availableConnections = quotaReserve.connections;
 
     log.debug("AUTH", `${provider} | available: ${availableConnections.length}/${connections.length}`);
     connections.forEach(c => {
@@ -124,6 +129,9 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
           if (resetAt && new Date(resetAt).getTime() > Date.now()) expiries.push(resetAt);
         });
       }
+      const quotaReserved = getQuotaReserveUnavailable(quotaReserve.blocked);
+      if (quotaReserved) return quotaReserved;
+
       const earliest = expiries.sort()[0] || null;
       if (earliest) {
         const earliestConn = lockedConns[0];
@@ -140,7 +148,6 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       return null;
     }
 
-    const settings = await getSettings();
     // Per-provider strategy overrides global setting
     const providerOverride = (settings.providerStrategies || {})[providerId] || {};
     const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
