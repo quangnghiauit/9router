@@ -13,6 +13,7 @@ Core capabilities:
 - Request/response translation across provider formats
 - Model combo fallback (multi-model sequence)
 - Account-level fallback (multi-account per provider)
+- Quota reserve routing (per-provider floor on Claude/Codex quota that this gateway's own account selection will not spend)
 - OAuth + API-key provider connection management
 - Local persistence for providers, keys, aliases, combos, settings, pricing
 - Usage/cost tracking and request logging
@@ -238,6 +239,37 @@ flowchart TD
 ```
 
 Fallback decisions are driven by `open-sse/services/accountFallback.js` using status codes and error-message heuristics.
+
+## Quota Reserve Routing
+
+`src/sse/services/quotaReserve.js` lets an operator keep a floor of Claude/Codex
+quota that *this* gateway's own account selection will not spend — e.g. to
+leave quota for someone else sharing the same subscription on another device.
+It is opt-in per provider, configured on the Quota Tracker dashboard page and
+persisted under `settings.quotaReserveRouting`.
+
+- A background scheduler (`runQuotaReserveRefreshTick`, started from
+  `initializeApp.js` when enabled) polls `getUsageForProvider` for every active
+  Claude/Codex connection on its own cadence (Claude every 5 minutes, Codex
+  every 60 seconds — independent of request traffic) and caches the quota
+  windows in memory.
+- `getProviderCredentials` (`src/sse/services/auth.js`) filters out a candidate
+  connection whose cached 5h or weekly window is at or below its configured
+  reserve, the same place model-lock and Antigravity quota-cache filtering
+  already run — before `fill-first`/`round-robin` selection. This applies to
+  both the first attempt and every fallback retry.
+- A cache read never blocks the request: if quota is missing or stale (no
+  successful refresh within roughly two polling cycles), the connection is
+  treated as reserved by default (fail-safe) — never assumed available; the
+  `blockWhenQuotaUnknown` setting can relax this.
+- When every candidate is reserved, `getProviderCredentials` returns the same
+  `allRateLimited` shape model-lock exhaustion uses, so the existing combo and
+  account fallback loop in `src/sse/handlers/chat.js` transparently moves to
+  the next model/provider instead of a new error path.
+- This only changes which already-configured connection serves the request.
+  Cross-provider order is still the existing Combo model list
+  (`dashboard/combos`); same-provider account order is still each
+  connection's `priority` (`dashboard/providers/[id]`).
 
 ## OAuth Onboarding and Token Refresh Lifecycle
 

@@ -14,6 +14,14 @@ const DEFAULT_SETTINGS = {
   stickyRoundRobinLimit: 3,
   providerStrategies: {},
   quotaVisibility: {},
+  quotaReserveRouting: {
+    enabled: false,
+    blockWhenQuotaUnknown: true,
+    providers: {
+      codex: { enabled: true, fiveHourReservePercent: 0, weeklyReservePercent: 0 },
+      claude: { enabled: true, fiveHourReservePercent: 0, weeklyReservePercent: 0 },
+    },
+  },
   comboStrategy: "fallback",
   comboStickyRoundRobinLimit: 1,
   comboStrategies: {},
@@ -89,6 +97,24 @@ export function mergeWithDefaults(raw) {
       } else {
         merged[key] = defVal;
       }
+    }
+  }
+  const reserve = merged.quotaReserveRouting;
+  if (reserve && typeof reserve === "object") {
+    const defaults = DEFAULT_SETTINGS.quotaReserveRouting;
+    merged.quotaReserveRouting = {
+      ...defaults,
+      ...reserve,
+      providers: {
+        ...defaults.providers,
+        ...(reserve.providers || {}),
+      },
+    };
+    for (const provider of Object.keys(defaults.providers)) {
+      merged.quotaReserveRouting.providers[provider] = {
+        ...defaults.providers[provider],
+        ...(reserve.providers?.[provider] || {}),
+      };
     }
   }
   if (merged.capacityAdapter && typeof merged.capacityAdapter === "object") {

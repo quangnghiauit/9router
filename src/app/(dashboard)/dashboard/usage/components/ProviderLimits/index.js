@@ -40,6 +40,7 @@ import {
   QUOTA_SORT_OPTIONS,
 } from "./utils";
 import Card from "@/shared/components/Card";
+import QuotaReserveRoutingCard from "./QuotaReserveRoutingCard";
 import { ConfirmModal, EditConnectionModal } from "@/shared/components";
 import AutoPingScheduleModal from "@/app/(dashboard)/dashboard/providers/[id]/AutoPingScheduleModal";
 import { getScheduleSlotLabels } from "@/shared/services/quotaPingSchedule";
@@ -67,6 +68,34 @@ const AUTO_PING_TOOLTIPS = {
   claude: "When your 5h quota runs out, auto-sends a request the moment it resets so a new window starts right away.",
   codex: "Auto-starts the next 5h Codex window after reset by sending a tiny request. Consumes a small amount of quota.",
 };
+
+const DEFAULT_QUOTA_RESERVE_ROUTING = {
+  enabled: false,
+  blockWhenQuotaUnknown: true,
+  providers: {
+    codex: { enabled: true, fiveHourReservePercent: 0, weeklyReservePercent: 0 },
+    claude: { enabled: true, fiveHourReservePercent: 0, weeklyReservePercent: 0 },
+  },
+};
+
+function normalizeQuotaReserveRouting(value) {
+  const config = value && typeof value === "object" ? value : {};
+  const providers = config.providers && typeof config.providers === "object" ? config.providers : {};
+  const number = (candidate) => {
+    const parsed = Number(candidate);
+    return Number.isInteger(parsed) ? Math.max(0, Math.min(100, parsed)) : 0;
+  };
+  const provider = (name) => ({
+    enabled: providers[name]?.enabled !== false,
+    fiveHourReservePercent: number(providers[name]?.fiveHourReservePercent),
+    weeklyReservePercent: number(providers[name]?.weeklyReservePercent),
+  });
+  return {
+    enabled: config.enabled === true,
+    blockWhenQuotaUnknown: config.blockWhenQuotaUnknown !== false,
+    providers: { codex: provider("codex"), claude: provider("claude") },
+  };
+}
 
 function kiroMethodLabel(conn) {
   const m = conn.providerSpecificData?.authMethod;
@@ -202,6 +231,9 @@ export default function ProviderLimits() {
   const [accountFilter, setAccountFilter] = useState("all");
   const [quotaSortMode, setQuotaSortMode] = useState("default");
   const [quotaVisibility, setQuotaVisibility] = useState({});
+  const [quotaReserveRouting, setQuotaReserveRouting] = useState(DEFAULT_QUOTA_RESERVE_ROUTING);
+  const [savingQuotaReserve, setSavingQuotaReserve] = useState(false);
+  const [quotaReserveError, setQuotaReserveError] = useState(null);
   const [expiringFirst, setExpiringFirst] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [bulkToggling, setBulkToggling] = useState(false);
@@ -610,9 +642,43 @@ export default function ProviderLimits() {
           codex: s?.codexAutoPing || {},
         });
         setQuotaVisibility(s?.quotaVisibility || {});
+        setQuotaReserveRouting(normalizeQuotaReserveRouting(s?.quotaReserveRouting));
       })
       .catch(() => {});
   }, []);
+
+  const saveQuotaReserveRouting = useCallback(async (next) => {
+    const previous = quotaReserveRouting;
+    setQuotaReserveRouting(next);
+    setSavingQuotaReserve(true);
+    setQuotaReserveError(null);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ quotaReserveRouting: next }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to save quota reserve routing");
+      }
+    } catch (error) {
+      setQuotaReserveRouting(previous);
+      setQuotaReserveError(error.message || "Failed to save quota reserve routing");
+    } finally {
+      setSavingQuotaReserve(false);
+    }
+  }, [quotaReserveRouting]);
+
+  const updateQuotaReserveProvider = useCallback((providerId, patch) => {
+    saveQuotaReserveRouting({
+      ...quotaReserveRouting,
+      providers: {
+        ...quotaReserveRouting.providers,
+        [providerId]: { ...quotaReserveRouting.providers[providerId], ...patch },
+      },
+    });
+  }, [quotaReserveRouting, saveQuotaReserveRouting]);
 
   const handleSaveAutoPing = useCallback(async (connectionId, provider, { reactive, schedule }) => {
     const settingsKey = AUTO_PING_SETTINGS_KEYS[provider];
@@ -891,6 +957,14 @@ export default function ProviderLimits() {
 
   return (
     <div className="space-y-6">
+      <QuotaReserveRoutingCard
+        routing={quotaReserveRouting}
+        saving={savingQuotaReserve}
+        error={quotaReserveError}
+        onToggleEnabled={(enabled) => saveQuotaReserveRouting({ ...quotaReserveRouting, enabled })}
+        onUpdateProvider={updateQuotaReserveProvider}
+      />
+
       {/* Header Controls */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end">
         <div className="flex flex-wrap items-center gap-1.5">
