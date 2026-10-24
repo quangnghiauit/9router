@@ -1,12 +1,29 @@
 "use client";
 
+import { useState } from "react";
 import Card from "@/shared/components/Card";
 import Toggle from "@/shared/components/Toggle";
 import Tooltip from "@/shared/components/Tooltip";
 
 const PROVIDER_LABELS = { codex: "Codex", claude: "Claude" };
 
-function ReservePercentInput({ label, value, onChange, disabled }) {
+function clampPercent(value) {
+  const parsed = Math.round(Number(value));
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 0;
+}
+
+/**
+ * Free-typing percent input: keeps its own draft string while focused so
+ * keystrokes are never fought by a parent re-render, and only commits
+ * (clamped 0-100) on blur — the same pattern as TokenSaverClient's numeric
+ * fields (handlePxpipeMinCharsBlur etc). The parent remounts this (via a
+ * `key` keyed on the committed value) instead of syncing props→state in an
+ * effect, so an external change (another tab, a failed-save rollback) still
+ * reaches the draft without a setState-in-effect render cascade.
+ */
+function ReservePercentInput({ label, value, onCommit, disabled }) {
+  const [draft, setDraft] = useState(String(value));
+
   return (
     <label className="flex flex-col gap-1 text-xs text-text-muted">
       {label}
@@ -15,11 +32,13 @@ function ReservePercentInput({ label, value, onChange, disabled }) {
         min={0}
         max={100}
         step={1}
-        value={value}
+        value={draft}
         disabled={disabled}
-        onChange={(event) => {
-          const next = Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0)));
-          onChange(next);
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          const next = clampPercent(draft);
+          setDraft(String(next));
+          if (next !== value) onCommit(next);
         }}
         className="h-8 w-20 rounded-lg border border-black/10 bg-black/[0.02] px-2 text-sm text-text-primary outline-none transition-colors hover:bg-black/5 disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/10"
       />
@@ -78,18 +97,20 @@ export default function QuotaReserveRoutingCard({
                 </div>
                 <div className="flex gap-3">
                   <ReservePercentInput
+                    key={`${providerId}-5h-${provider.fiveHourReservePercent}`}
                     label="5h reserve %"
                     value={provider.fiveHourReservePercent}
                     disabled={saving || !provider.enabled}
-                    onChange={(fiveHourReservePercent) =>
+                    onCommit={(fiveHourReservePercent) =>
                       onUpdateProvider(providerId, { fiveHourReservePercent })
                     }
                   />
                   <ReservePercentInput
+                    key={`${providerId}-weekly-${provider.weeklyReservePercent}`}
                     label="Weekly reserve %"
                     value={provider.weeklyReservePercent}
                     disabled={saving || !provider.enabled}
-                    onChange={(weeklyReservePercent) =>
+                    onCommit={(weeklyReservePercent) =>
                       onUpdateProvider(providerId, { weeklyReservePercent })
                     }
                   />
